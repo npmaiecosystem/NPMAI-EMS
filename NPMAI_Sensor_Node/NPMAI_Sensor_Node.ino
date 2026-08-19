@@ -1,15 +1,3 @@
-// =====================================================================
-// NPMAI-Predictive Sensor - Layer 1: ESP32 Edge Firmware
-//
-// Pure acquisition + relay, plus one hardcoded local safety failsafe.
-// NO physics (R_effective, EWMA, CUSUM, etc.) is computed on this
-// device - that all happens in Layers 3/4 in the cloud. This firmware's
-// only jobs are: read sensors accurately, get the data off the device
-// reliably (buffering through outages), and guarantee the local
-// overtemp failsafe fires no matter what else is or isn't working.
-//
-// See config.h for every value you need to edit for your site.
-// =====================================================================
 #include <math.h>
 #include "config.h"
 #include "Reading.h"
@@ -25,7 +13,7 @@
 I2CMux        mux(TCA9548A_ADDR);
 CurrentSensor currentSensor;
 ThermalSensor thermalSensor;
-Failsafe      failsafe;      // one shared panel-level alarm output; see note in loop() below
+Failsafe      failsafe;      
 WiFiManager   wifiManager;
 TimeSync      timeSync;
 RingBuffer    ringBuffer;
@@ -33,9 +21,6 @@ MQTTHandler   mqttHandler;
 
 static float thermalFrame[MLX90640_ROWS * MLX90640_COLS];
 
-// Per-breaker accumulators, averaged between SEND_INTERVAL_MS ticks to
-// smooth out sample-to-sample noise/jitter rather than transmitting
-// every raw SAMPLE_INTERVAL_MS reading individually.
 struct BreakerAccumulator {
   double sumI = 0, sumTh = 0, sumTa = 0;
   uint16_t samples = 0;
@@ -51,18 +36,12 @@ void setup() {
   Serial.println();
   Serial.println("NPMAI Predictive Sensor - Layer 1 edge firmware booting...");
 
-  // Failsafe GPIO must be configured before anything else that could
-  // possibly hang (WiFi, NTP) gets a chance to.
   failsafe.begin();
 
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   Wire.setClock(I2C_CLOCK_HZ);
   mux.begin();
 
-  // Startup diagnostic pass: confirm every configured node's sensors
-  // respond. A node failing here is logged but not fatal to boot - a
-  // node that drops out later (loose I2C connector, sensor fault) is
-  // handled per-reading in the main loop instead of crashing the device.
   for (uint8_t n = 0; n < NUM_NODES; n++) {
     MonitoringNode &node = NODES[n];
     if (!mux.selectChannel(node.mux_channel)) {
@@ -99,15 +78,11 @@ void setup() {
 }
 
 void loop() {
-  // --- Non-blocking network maintenance, every loop iteration ---
   wifiManager.update();
   mqttHandler.update();
 
   unsigned long now = millis();
 
-  // =====================================================================
-  // SAMPLE TICK - read every sensor, evaluate the failsafe immediately
-  // =====================================================================
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
     lastSampleMs = now;
 
@@ -124,13 +99,6 @@ void loop() {
         Serial.printf("[SAMPLE] Node %u: ADS1115 not responding, skipping current reads\n", n);
       }
 
-      // NOTE: thermalSensor.begin() is called every tick, for every
-      // node, even though the I2C address (0x33) never changes. This is
-      // intentional and required, not wasted overhead - see the comment
-      // on ThermalSensor::begin() in ThermalSensor.h. Each mux channel
-      // hides a physically different MLX90640 with its own factory
-      // calibration EEPROM, and that calibration must be reloaded every
-      // time we switch which physical unit we're talking to.
       bool mlxOk = thermalSensor.begin(node.mlx90640_addr);
       bool frameOk = mlxOk && thermalSensor.readFrame(thermalFrame);
       if (!frameOk) {
@@ -146,13 +114,6 @@ void loop() {
       for (uint8_t b = 0; b < node.num_breakers; b++) {
         BreakerZone &bz = node.breakers[b];
 
-        // Blocking, ~0.2-0.4s per breaker at the default CT_RMS_SAMPLE_COUNT
-        // (200 samples @ ~860SPS + I2C overhead). Fine here because this
-        // whole loop runs once per SAMPLE_INTERVAL_MS (default 10s), not
-        // once per loop() iteration - with 12 breakers total that's
-        // roughly 2.4-4.8s of blocking work per sample tick, comfortably
-        // inside the 10s budget. If you add more breakers/nodes, re-check
-        // this budget and raise SAMPLE_INTERVAL_MS if needed.
         float iRms = adsOk
           ? currentSensor.readRMSCurrent(bz.ads_channel, node.ct_burden_ohms, node.ct_ratio)
           : NAN;
@@ -162,21 +123,7 @@ void loop() {
                                     bz.thermal_col_start, bz.thermal_col_end)
           : NAN;
 
-        // --- Local safety failsafe ---
-        // Evaluated right here, immediately, per breaker, independent of
-        // WiFi/MQTT state and independent of the averaging/send logic
-        // below. This uses the raw per-sample-interval hotspot reading
-        // (every SAMPLE_INTERVAL_MS), NOT the SEND_INTERVAL_MS average -
-        // we don't want a 60-second smoothing window standing between a
-        // dangerous reading and the alarm firing.
-        //
-        // NOTE ON SCOPE: `failsafe` is a single shared object driving one
-        // GPIO output for the whole panel/device - any breaker crossing
-        // its threshold trips the same physical buzzer/relay. If you
-        // need to know WHICH breaker tripped without checking the
-        // dashboard, or want independent per-breaker alarm outputs,
-        // that's a hardware change (one Failsafe instance + one GPIO per
-        // breaker) rather than a firmware logic change.
+      
         if (frameOk) {
           failsafe.evaluate(hotspotC, bz.failsafe_temp_c);
         }
@@ -194,10 +141,6 @@ void loop() {
     }
   }
 
-  // =====================================================================
-  // SEND TICK - average, transmit (or buffer), and opportunistically
-  // flush any backlog from a prior outage
-  // =====================================================================
   if (now - lastSendMs >= SEND_INTERVAL_MS) {
     lastSendMs = now;
 
@@ -225,27 +168,16 @@ void loop() {
           }
         }
 
-        // Reset the accumulator for the next averaging window.
         a = BreakerAccumulator();
       }
     }
 
-    // Opportunistically drain any buffered backlog while we have a live
-    // connection, preserving each reading's original timestamp. Capped
-    // per send-tick so a large backlog after a long outage can't starve
-    // live sampling by hogging the loop.
     const uint16_t MAX_FLUSH_PER_TICK = 20;
     uint16_t flushed = 0;
     Reading buffered;
     while (mqttHandler.isConnected() && flushed < MAX_FLUSH_PER_TICK && ringBuffer.pop(buffered)) {
       if (!mqttHandler.publish(buffered)) {
-        // Publish failed (e.g. broker transiently refused). Push it back
-        // in - since this is a ring buffer, not a deque, it goes to the
-        // back rather than staying at the front, which can reorder it
-        // behind newer buffered entries. That's acceptable here because
-        // every reading carries its own original `timestamp`, so
-        // downstream trend reconstruction in Layer 4 uses that field,
-        // not MQTT arrival order.
+
         ringBuffer.push(buffered);
         break;
       }
