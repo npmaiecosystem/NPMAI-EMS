@@ -67,6 +67,78 @@ class Settings(BaseSettings):
     # f"{prefix}-{pid}", so multiple physics workers can share the same
     # group and split the stream without stepping on each other.
     physics_consumer_name_prefix: str = "physics-worker"
+    
+    # ---- Layer 4: feature engineering + risk scoring ----
+    # How often feature_service.py's poller checks for new derived_metrics
+    # rows per joint. This is a POLLING design, not event-driven off a
+    # Redis stream Layer 3 doesn't currently publish (see
+    # app/feature_service.py's module docstring for the full trade-off
+    # and the one-line change needed if you later want it event-driven).
+    feature_poll_interval_seconds: float = 60.0
+
+    # EWMA smoothing window, in NUMBER OF READINGS (not time) - with this
+    # pilot's ~60s send interval, span=48 is roughly a 48-minute window
+    # per reading's typical cadence per breaker. Tune per your actual
+    # send interval if it differs meaningfully from 60s.
+    ewma_span_readings: int = 48
+
+    # CUSUM slack parameter, in standard deviations of this joint's own
+    # residual-noise baseline. 0.5 is the conventional default for
+    # detecting a sustained ~1-sigma shift without alarming on pure
+    # noise - see app/feature_math.py's cusum_step docstring.
+    cusum_k_slack: float = 0.5
+
+    # How many valid residual_c readings (status='ok' from Layer 3) a
+    # joint needs before its OWN residual-noise baseline (mean/std) is
+    # trusted enough to run CUSUM against - separate from Layer 3's own
+    # baseline_min_readings, which governs R_nominal instead. See
+    # app/feature_baseline.py.
+    feature_baseline_min_readings: int = 168  # ~7 days at 1 reading/hour-equivalent cadence
+
+    # Rolling window (days) used for the dR/dt slope regression in
+    # app/feature_processor.py.
+    slope_window_days: int = 7
+
+    # Minimum number of joint_features rows needed within
+    # slope_window_days before a slope is computed at all - fewer than
+    # this and the regression is too noisy/short to trust, so
+    # joint_risk_score gets status='insufficient_history_for_slope'
+    # instead of a spurious slope.
+    slope_min_readings: int = 24
+
+    # Default 'critical' temperature rise used to derive each joint's
+    # own critical_r_ohms (app/feature_math.py's critical_r_for_breaker)
+    # when a specific breaker has no override in
+    # app/breaker_risk_config.py. 15C = the boundary between
+    # "intermediate" and "serious" on the Delta-T severity scale - i.e.
+    # critical_r_ohms is defined as "the R that would put this joint at
+    # the edge of 'serious' if it were running at its full rated
+    # current", a deliberately conservative (early) trigger point.
+    default_critical_delta_t_c: float = 15.0
+
+    # Default rated current (amps) used for critical_r_ohms when a
+    # specific breaker has no override - same "generic placeholder,
+    # review per site" spirit as config.h's example CT ratios and
+    # app/breaker_thermal_config.py's default joint geometry. MUST be
+    # overridden per real breaker in app/breaker_risk_config.py before
+    # relying on projected_days_to_critical for anything operational -
+    # an unreviewed default rated current makes that number meaningless
+    # for a specific real breaker.
+    default_rated_current_amps: float = 20.0
+
+    # Where anomaly_model.py persists trained per-joint IsolationForest
+    # models (joblib files, one per panel_id/breaker_id).
+    anomaly_model_dir: str = "./models/anomaly"
+
+    # Minimum joint_features rows required before a joint's first
+    # anomaly model is trained at all - below this, joint_risk_score's
+    # anomaly_score stays NULL rather than training on too little data
+    # to mean anything.
+    anomaly_model_min_training_rows: int = 336  # ~2 weeks at hourly-equivalent cadence
+
+    # How often (hours) anomaly_model.py's retrain job re-fits each
+    # joint's model against its latest accumulated history.
+    anomaly_retrain_interval_hours: float = 168.0  # weekly
 
 
 settings = Settings()
