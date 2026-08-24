@@ -140,5 +140,47 @@ class Settings(BaseSettings):
     # joint's model against its latest accumulated history.
     anomaly_retrain_interval_hours: float = 168.0  # weekly
 
+    """
+Append to the SAME Settings class in app/config.py - see Layer 3/4's
+own config_additions.py files for why there must only ever be one.
+"""
+
+    # ---- Layer 5: provider selection ----
+    # Which provider tries FIRST for every call. Change this (env var
+    # LAYER5_PRIMARY_PROVIDER) to switch your default model with zero
+    # code change - this is the concrete answer to "give option to
+    # change" for provider choice, same philosophy as audit_times being
+    # data (building_audit_config) rather than a hardcoded schedule.
+    layer5_primary_provider: str = "anthropic"
+
+    # Tried in order after the primary fails. Empty list = no fallback,
+    # a primary failure means the whole call fails.
+    layer5_fallback_providers: list[str] = ["openai", "gemini", "grok"]
+
+    layer5_max_output_tokens: int = 800
+
+    # Per-building daily spend ceiling in USD, checked BEFORE every call
+    # (app/llm/usage_tracker.py's check_spend_cap). None = no cap
+    # (unlimited spend) - an explicit choice, not a silent default.
+    layer5_daily_spend_cap_usd: float | None = 5.00
+
+    # ---- Provider credentials and model selection ----
+    # Every one of these can be swapped independently - e.g. set
+    # anthropic_model to a different Claude model, or leave any
+    # unused provider's API key blank (app/llm/registry.py's
+    # build_provider() logs and skips a provider that fails to
+    # construct, e.g. from a missing key, rather than crashing).
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o"
+
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5"
+
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-1.5-pro"
+
+    grok_api_key: str = ""
+    grok_model: str = "grok-4"
+
 
 settings = Settings()
