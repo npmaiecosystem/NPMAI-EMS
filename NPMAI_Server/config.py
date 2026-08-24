@@ -140,11 +140,6 @@ class Settings(BaseSettings):
     # joint's model against its latest accumulated history.
     anomaly_retrain_interval_hours: float = 168.0  # weekly
 
-    """
-Append to the SAME Settings class in app/config.py - see Layer 3/4's
-own config_additions.py files for why there must only ever be one.
-"""
-
     # ---- Layer 5: provider selection ----
     # Which provider tries FIRST for every call. Change this (env var
     # LAYER5_PRIMARY_PROVIDER) to switch your default model with zero
@@ -170,6 +165,7 @@ own config_additions.py files for why there must only ever be one.
     # unused provider's API key blank (app/llm/registry.py's
     # build_provider() logs and skips a provider that fails to
     # construct, e.g. from a missing key, rather than crashing).
+    
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
 
@@ -181,6 +177,15 @@ own config_additions.py files for why there must only ever be one.
 
     grok_api_key: str = ""
     grok_model: str = "grok-4"
+
+
+    # ---- Layer 6: FCM notification dispatch ----
+    # Path to the Firebase service account JSON key file (Project
+    # Settings -> Service Accounts -> Generate new private key, in the
+    # Firebase console). This file grants send access to your whole FCM
+    # project - keep it out of version control, mount it as a secret in
+    # whatever deployment environment runs app/layer6/dispatcher_service.py.
+    fcm_service_account_json_path: str = "./secrets/fcm-service-account.json"
 
 
 settings = Settings()
