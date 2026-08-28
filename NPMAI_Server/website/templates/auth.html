@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ 'Log in' if mode == 'login' else 'Register' }} — NPMAI-PEMS</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="auth-body">
+
+<a href="/" class="brand auth-brand">
+  <svg width="30" height="30" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="10.5" stroke="#2DD4BF" stroke-width="2"/><path d="M16 16 L16 6" stroke="#F2712B" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="16" r="2.2" fill="#F2712B"/><path d="M8 22 Q16 27 24 22" stroke="#5C6873" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>
+  NPMAI-PEMS
+</a>
+
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="modal-tabs">
+      <a href="/login" class="modal-tab {{ 'active' if mode == 'login' else '' }}">Log in</a>
+      <a href="/register" class="modal-tab {{ 'active' if mode == 'register' else '' }}">Register</a>
+    </div>
+    <div class="modal-body">
+      <h3>{{ 'Welcome back' if mode == 'login' else 'Create your account' }}</h3>
+      <div class="modal-sub">{{ "Log in to your building's monitoring dashboard." if mode == 'login' else 'Set up access ahead of your installation visit.' }}</div>
+
+      <form id="auth-form">
+        {% if mode == 'register' %}
+        <div class="field"><label>Full name</label><input type="text" name="name" placeholder="Your name" required></div>
+        {% endif %}
+        <div class="field"><label>Email</label><input type="email" name="email" placeholder="you@company.com" required></div>
+        {% if mode == 'register' %}
+        <div class="field"><label>Building name</label><input type="text" name="building_name" placeholder="e.g. Sunrise Towers, Sector 21"></div>
+        <div class="field"><label>Number of floors</label><input type="number" name="floors" min="1" value="4"></div>
+        {% endif %}
+        <div class="field"><label>Password</label><input type="password" name="password" placeholder="••••••••" required minlength="6"></div>
+        <button class="btn btn-thermal modal-submit" type="submit">{{ 'Log in' if mode == 'login' else 'Create account' }}</button>
+      </form>
+      <div id="auth-status"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const MODE = "{{ mode }}";
+document.getElementById('auth-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  const statusEl = document.getElementById('auth-status');
+  statusEl.innerHTML = '';
+
+  const endpoint = MODE === 'login' ? '/api/login' : '/api/register';
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      statusEl.innerHTML = `<div class="modal-status">Success — taking you to your dashboard...</div>`;
+      window.location.href = data.redirect;
+    } else {
+      statusEl.innerHTML = `<div class="modal-status modal-status-error">${data.error}</div>`;
+    }
+  } catch (err) {
+    statusEl.innerHTML = `<div class="modal-status modal-status-error">Something went wrong reaching the server. Please try again.</div>`;
+  }
+});
+</script>
+</body>
+</html>
